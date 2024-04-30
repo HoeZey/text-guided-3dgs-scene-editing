@@ -63,6 +63,8 @@ class InstructPix2PixGuidance(BaseObject):
         self.pipe = StableDiffusionInstructPix2PixPipeline.from_pretrained(
             self.cfg.ip2p_name_or_path, **pipe_kwargs
         ).to(self.device)
+
+        # inverse_scheduler = DDIMInverseScheduler.from_pretrained('stabilityai/stable-diffusion-2-1', subfolder='scheduler')
         self.scheduler = DDIMScheduler.from_pretrained(
             self.cfg.ddim_scheduler_name_or_path,
             subfolder="scheduler",
@@ -131,6 +133,7 @@ class InstructPix2PixGuidance(BaseObject):
             encoder_hidden_states=encoder_hidden_states.to(self.weights_dtype),
         ).sample.to(input_dtype)
 
+    # this one looks the same as the ddim inversion github code's part
     @torch.cuda.amp.autocast(enabled=False)
     def encode_images(
         self, imgs: Float[Tensor, "B 3 H W"]
@@ -172,15 +175,30 @@ class InstructPix2PixGuidance(BaseObject):
     ) -> Float[Tensor, "B 4 DH DW"]:
         self.scheduler.config.num_train_timesteps = t.item()
         self.scheduler.set_timesteps(self.cfg.diffusion_steps)
+
+        # pipe = StableDiffusionPipeline.from_pretrained('stabilityai/stable-diffusion-2-1',
+        #                                                scheduler=inverse_scheduler,
+        #                                                safety_checker=None,
+        #                                                torch_dtype=dtype)
+        # pipe.to(device)
+        # inv_latents, _ = pipe(prompt="", negative_prompt="", guidance_scale=1.,
+        #                       width=input_img.shape[-1], height=input_img.shape[-2],
+        #                       output_type='latent', return_dict=False,
+        #                       num_inference_steps=num_steps, latents=latents)
+        # return inv_latents
+
         with torch.no_grad():
             # add noise
+            # here is the non-deterministic noise
             noise = torch.randn_like(latents)
+            # i think the ddim inverse doesnt need the noise added.
+            # might just not need any other modifications
             latents = self.scheduler.add_noise(latents, noise, t)  # type: ignore
             threestudio.debug("Start editing...")
             # sections of code used from https://github.com/huggingface/diffusers/blob/main/src/diffusers/pipelines/stable_diffusion/pipeline_stable_diffusion_instruct_pix2pix.py
             for i, t in enumerate(self.scheduler.timesteps):
                 # predict the noise residual with unet, NO grad!
-                with torch.no_grad():
+                with torch.no_grad():  # is the second no grad really necessary?
                     # pred noise
                     latent_model_input = torch.cat([latents] * 3)
                     latent_model_input = torch.cat(
@@ -238,9 +256,10 @@ class InstructPix2PixGuidance(BaseObject):
         grad = w * (noise_pred - noise)
         return grad
 
+    # this seems like the entry point for editing
     def __call__(
         self,
-        rgb: Float[Tensor, "B H W C"],
+        rgb: Float[Tensor, "B H W C"],  # but why is there batch?
         cond_rgb: Float[Tensor, "B H W C"],
         prompt_utils: PromptProcessorOutput,
         **kwargs,
