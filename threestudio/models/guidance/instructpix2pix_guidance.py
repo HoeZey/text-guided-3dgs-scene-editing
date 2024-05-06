@@ -4,7 +4,8 @@ import cv2
 import numpy as np
 import torch
 import torch.nn.functional as F
-from diffusers import DDIMScheduler, StableDiffusionInstructPix2PixPipeline
+from diffusers import DDIMScheduler, StableDiffusionInstructPix2PixPipeline, DDIMInverseScheduler, \
+    StableDiffusionPipeline
 from diffusers.utils.import_utils import is_xformers_available
 from tqdm import tqdm
 
@@ -20,7 +21,8 @@ class InstructPix2PixGuidance(BaseObject):
     @dataclass
     class Config(BaseObject.Config):
         cache_dir: Optional[str] = None
-        ddim_scheduler_name_or_path: str = "CompVis/stable-diffusion-v1-4"
+        # ddim_scheduler_name_or_path: str = "CompVis/stable-diffusion-v1-4"
+        ddim_scheduler_name_or_path: str = 'stabilityai/stable-diffusion-2-1'
         ip2p_name_or_path: str = "timbrooks/instruct-pix2pix"
 
         enable_memory_efficient_attention: bool = False
@@ -64,14 +66,14 @@ class InstructPix2PixGuidance(BaseObject):
             self.cfg.ip2p_name_or_path, **pipe_kwargs
         ).to(self.device)
 
-        # inverse_scheduler = DDIMInverseScheduler.from_pretrained('stabilityai/stable-diffusion-2-1', subfolder='scheduler')
-        self.scheduler = DDIMScheduler.from_pretrained(
+        print(f'Loading scheduler for {self.cfg.ddim_scheduler_name_or_path}')
+        self.inverse_scheduler = DDIMInverseScheduler.from_pretrained(
             self.cfg.ddim_scheduler_name_or_path,
-            subfolder="scheduler",
+            subfolder='scheduler',
             torch_dtype=self.weights_dtype,
             cache_dir=self.cfg.cache_dir,
         )
-        self.scheduler.set_timesteps(self.cfg.diffusion_steps)
+        self.inverse_scheduler.set_timesteps(self.cfg.diffusion_steps)
 
         if self.cfg.enable_memory_efficient_attention:
             if parse_version(torch.__version__) >= parse_version("2"):
@@ -103,10 +105,10 @@ class InstructPix2PixGuidance(BaseObject):
         for p in self.unet.parameters():
             p.requires_grad_(False)
 
-        self.num_train_timesteps = self.scheduler.config.num_train_timesteps
+        self.num_train_timesteps = self.inverse_scheduler.config.num_train_timesteps
         self.set_min_max_steps()  # set to default value
 
-        self.alphas: Float[Tensor, "..."] = self.scheduler.alphas_cumprod.to(
+        self.alphas: Float[Tensor, "..."] = self.inverse_scheduler.alphas_cumprod.to(
             self.device
         )
 
@@ -173,56 +175,24 @@ class InstructPix2PixGuidance(BaseObject):
         image_cond_latents: Float[Tensor, "B 4 DH DW"],
         t: Int[Tensor, "B"],
     ) -> Float[Tensor, "B 4 DH DW"]:
-        self.scheduler.config.num_train_timesteps = t.item()
-        self.scheduler.set_timesteps(self.cfg.diffusion_steps)
+        self.inverse_scheduler.config.num_train_timesteps = t.item()
+        self.inverse_scheduler.set_timesteps(self.cfg.diffusion_steps)
 
-        # pipe = StableDiffusionPipeline.from_pretrained('stabilityai/stable-diffusion-2-1',
-        #                                                scheduler=inverse_scheduler,
-        #                                                safety_checker=None,
-        #                                                torch_dtype=dtype)
-        # pipe.to(device)
-        # inv_latents, _ = pipe(prompt="", negative_prompt="", guidance_scale=1.,
-        #                       width=input_img.shape[-1], height=input_img.shape[-2],
-        #                       output_type='latent', return_dict=False,
-        #                       num_inference_steps=num_steps, latents=latents)
-        # return inv_latents
+        threestudio.debug("Start editing...")
 
-        with torch.no_grad():
-            # add noise
-            # here is the non-deterministic noise
-            noise = torch.randn_like(latents)
-            # i think the ddim inverse doesnt need the noise added.
-            # might just not need any other modifications
-            latents = self.scheduler.add_noise(latents, noise, t)  # type: ignore
-            threestudio.debug("Start editing...")
-            # sections of code used from https://github.com/huggingface/diffusers/blob/main/src/diffusers/pipelines/stable_diffusion/pipeline_stable_diffusion_instruct_pix2pix.py
-            for i, t in enumerate(self.scheduler.timesteps):
-                # predict the noise residual with unet, NO grad!
-                with torch.no_grad():  # is the second no grad really necessary?
-                    # pred noise
-                    latent_model_input = torch.cat([latents] * 3)
-                    latent_model_input = torch.cat(
-                        [latent_model_input, image_cond_latents], dim=1
-                    )
+        pipe = StableDiffusionPipeline.from_pretrained(self.cfg.ddim_scheduler_name_or_path,
+                                                       scheduler=self.inverse_scheduler,
+                                                       safety_checker=None,
+                                                       torch_dtype=self.weights_dtype)
+        pipe.to(self.device)
+        inv_latents, _ = pipe(prompt="", negative_prompt="", guidance_scale=1.,
+                              # width=input_img.shape[-1], height=input_img.shape[-2],
+                              output_type='latent', return_dict=False,
+                              num_inference_steps=250, latents=latents.to(self.weights_dtype))
 
-                    noise_pred = self.forward_unet(
-                        latent_model_input, t, encoder_hidden_states=text_embeddings
-                    )
+        threestudio.debug("Editing finished.")
 
-                # perform classifier-free guidance
-                noise_pred_text, noise_pred_image, noise_pred_uncond = noise_pred.chunk(
-                    3
-                )
-                noise_pred = (
-                    noise_pred_uncond
-                    + self.cfg.guidance_scale * (noise_pred_text - noise_pred_image)
-                    + self.cfg.condition_scale * (noise_pred_image - noise_pred_uncond)
-                )
-
-                # get previous sample, continue loop
-                latents = self.scheduler.step(noise_pred, t, latents).prev_sample
-            threestudio.debug("Editing finished.")
-        return latents
+        return inv_latents
 
     def compute_grad_sds(
         self,
@@ -316,6 +286,8 @@ class InstructPix2PixGuidance(BaseObject):
             }
         else:
             edit_latents = self.edit_latents(text_embeddings, latents, cond_latents, t)
+            print('obtained latents')
+            print(edit_latents.shape)
             edit_images = self.decode_latents(edit_latents)
             edit_images = F.interpolate(edit_images, (H, W), mode="bilinear")
 
