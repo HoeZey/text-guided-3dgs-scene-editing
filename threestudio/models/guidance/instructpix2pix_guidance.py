@@ -41,7 +41,9 @@ class InstructPix2PixGuidance(BaseObject):
         min_step_percent: float = 0.02
         max_step_percent: float = 0.98
 
-        diffusion_steps: int = 20
+        diffusion_steps: int = 100
+        # for some reason this error does not show up when using code from https://github.com/shaibagon/diffusers_ddim_inversion
+        # ValueError: `num_inference_steps`: 150 cannot be larger than `self.config.train_timesteps`: 125 as the unet model trained with this scheduler can only handle maximal 125 timesteps.
 
         use_sds: bool = False
 
@@ -178,21 +180,33 @@ class InstructPix2PixGuidance(BaseObject):
         self.inverse_scheduler.config.num_train_timesteps = t.item()
         self.inverse_scheduler.set_timesteps(self.cfg.diffusion_steps)
 
-        threestudio.debug("Start editing...")
+        with torch.no_grad():
+            threestudio.debug("Start editing...")
+            for i, t in enumerate(self.inverse_scheduler.timesteps):
+                latent_model_input = torch.cat([latents] * 3)
+                latent_model_input = torch.cat(
+                    [latent_model_input, image_cond_latents], dim=1
+                )
 
-        pipe = StableDiffusionPipeline.from_pretrained(self.cfg.ddim_scheduler_name_or_path,
-                                                       scheduler=self.inverse_scheduler,
-                                                       safety_checker=None,
-                                                       torch_dtype=self.weights_dtype)
-        pipe.to(self.device)
-        inv_latents, _ = pipe(prompt="", negative_prompt="", guidance_scale=1.,
-                              # width=input_img.shape[-1], height=input_img.shape[-2],
-                              output_type='latent', return_dict=False,
-                              num_inference_steps=250, latents=latents.to(self.weights_dtype))
+                noise_pred = self.forward_unet(
+                    latent_model_input, t, encoder_hidden_states=text_embeddings
+                )
 
-        threestudio.debug("Editing finished.")
+                # perform classifier-free guidance
+                noise_pred_text, noise_pred_image, noise_pred_uncond = noise_pred.chunk(
+                    3
+                )
+                noise_pred = (
+                        noise_pred_uncond
+                        + self.cfg.guidance_scale * (noise_pred_text - noise_pred_image)
+                        + self.cfg.condition_scale * (noise_pred_image - noise_pred_uncond)
+                )
 
-        return inv_latents
+                # get previous sample, continue loop
+                latents = self.inverse_scheduler.step(noise_pred, t, latents).prev_sample
+            threestudio.debug("Editing finished.")
+
+        return latents
 
     def compute_grad_sds(
         self,
@@ -286,8 +300,6 @@ class InstructPix2PixGuidance(BaseObject):
             }
         else:
             edit_latents = self.edit_latents(text_embeddings, latents, cond_latents, t)
-            print('obtained latents')
-            print(edit_latents.shape)
             edit_images = self.decode_latents(edit_latents)
             edit_images = F.interpolate(edit_images, (H, W), mode="bilinear")
 
