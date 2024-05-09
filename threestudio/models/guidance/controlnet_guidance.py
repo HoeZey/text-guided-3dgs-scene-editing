@@ -6,7 +6,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from controlnet_aux import CannyDetector, NormalBaeDetector
-from diffusers import ControlNetModel, DDIMScheduler, StableDiffusionControlNetPipeline
+from diffusers import ControlNetModel, DDIMScheduler, StableDiffusionControlNetPipeline, DDIMInverseScheduler, StableDiffusionPipeline
 from diffusers.utils.import_utils import is_xformers_available
 from tqdm import tqdm
 
@@ -24,6 +24,7 @@ class ControlNetGuidance(BaseObject):
         cache_dir: Optional[str] = None
         pretrained_model_name_or_path: str = "SG161222/Realistic_Vision_V2.0"
         ddim_scheduler_name_or_path: str = "runwayml/stable-diffusion-v1-5"
+        ddim_inv_scheduler_name_or_path: str = "stabilityai/stable-diffusion-2-1"
         control_type: str = "normal"  # normal/canny
 
         enable_memory_efficient_attention: bool = False
@@ -95,6 +96,7 @@ class ControlNetGuidance(BaseObject):
         self.pipe = StableDiffusionControlNetPipeline.from_pretrained(
             self.cfg.pretrained_model_name_or_path, controlnet=controlnet, **pipe_kwargs
         ).to(self.device)
+        
         self.scheduler = DDIMScheduler.from_pretrained(
             self.cfg.ddim_scheduler_name_or_path,
             subfolder="scheduler",
@@ -102,6 +104,18 @@ class ControlNetGuidance(BaseObject):
             cache_dir=self.cfg.cache_dir,
         )
         self.scheduler.set_timesteps(self.cfg.diffusion_steps)
+
+        self.inv_scheduler = DDIMInverseScheduler.from_pretrained(
+            self.cfg.ddim_inv_scheduler_name_or_path,
+            subfolder='scheduler',
+            torch_dtype=self.weights_dtype,
+            cache_dir=self.cfg.cache_dir
+            )
+        
+        self.inv_pipe = StableDiffusionPipeline.from_pretrained('stabilityai/stable-diffusion-2-1',
+                                                        scheduler=self.inv_scheduler,
+                                                        **pipe_kwargs
+                                                        ).to(self.device)
 
         if self.cfg.enable_memory_efficient_attention:
             if parse_version(torch.__version__) >= parse_version("2"):
@@ -236,8 +250,14 @@ class ControlNetGuidance(BaseObject):
         t: Int[Tensor, "B"],
     ) -> Float[Tensor, "B 4 DH DW"]:
         self.scheduler.config.num_train_timesteps = t.item()
-        self.scheduler.set_timesteps(self.cfg.diffusion_steps)
+        self.scheduler.set_timesteps(self.cfg.diffusion_steps)        
         with torch.no_grad():
+
+            latents, _ = self.inv_pipe(prompt="", negative_prompt="", guidance_scale=1.,
+                                #   width=input_img.shape[-1], height=input_img.shape[-2],
+                                  output_type='latent', return_dict=False,
+                                  num_inference_steps=self.cfg.diffusion_steps, latents=latents) # .to(self.weights_dtype)
+
             # add noise
             noise = torch.randn_like(latents)
             latents = self.scheduler.add_noise(latents, noise, t)  # type: ignore
