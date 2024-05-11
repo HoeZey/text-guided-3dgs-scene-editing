@@ -24,7 +24,7 @@ class ControlNetGuidance(BaseObject):
         cache_dir: Optional[str] = None
         pretrained_model_name_or_path: str = "SG161222/Realistic_Vision_V2.0"
         ddim_scheduler_name_or_path: str = "runwayml/stable-diffusion-v1-5"
-        ddim_inv_scheduler_name_or_path: str = "stabilityai/stable-diffusion-2-1"
+        ddim_inv_scheduler_name_or_path: str = "runwayml/stable-diffusion-v1-5" # "stabilityai/stable-diffusion-2-1"
         control_type: str = "normal"  # normal/canny
 
         enable_memory_efficient_attention: bool = False
@@ -259,8 +259,8 @@ class ControlNetGuidance(BaseObject):
                                   num_inference_steps=self.cfg.diffusion_steps, latents=latents) # .to(self.weights_dtype)
 
             # add noise
-            noise = torch.randn_like(latents)
-            latents = self.scheduler.add_noise(latents, noise, t)  # type: ignore
+            # noise = torch.randn_like(latents)
+            # latents = self.scheduler.add_noise(latents, noise, t)  # type: ignore
 
             # sections of code used from https://github.com/huggingface/diffusers/blob/main/src/diffusers/pipelines/stable_diffusion/pipeline_stable_diffusion_instruct_pix2pix.py
             threestudio.debug("Start editing...")
