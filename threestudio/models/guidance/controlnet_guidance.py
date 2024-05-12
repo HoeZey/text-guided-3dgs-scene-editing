@@ -112,10 +112,11 @@ class ControlNetGuidance(BaseObject):
             cache_dir=self.cfg.cache_dir
             )
         
-        self.inv_pipe = StableDiffusionPipeline.from_pretrained('stabilityai/stable-diffusion-2-1',
-                                                        scheduler=self.inv_scheduler,
-                                                        **pipe_kwargs
-                                                        ).to(self.device)
+        self.inv_pipe = StableDiffusionPipeline.from_pretrained(
+            'stabilityai/stable-diffusion-2-1',
+            scheduler=self.inv_scheduler,
+            **pipe_kwargs
+        ).to(self.device)
 
         if self.cfg.enable_memory_efficient_attention:
             if parse_version(torch.__version__) >= parse_version("2"):
@@ -253,10 +254,12 @@ class ControlNetGuidance(BaseObject):
         self.scheduler.set_timesteps(self.cfg.diffusion_steps)        
         with torch.no_grad():
 
-            latents, _ = self.inv_pipe(prompt="", negative_prompt="", guidance_scale=1.,
-                                #   width=input_img.shape[-1], height=input_img.shape[-2],
-                                  output_type='latent', return_dict=False,
-                                  num_inference_steps=self.cfg.diffusion_steps, latents=latents) # .to(self.weights_dtype)
+            latents, _ = self.inv_pipe(
+                prompt="", negative_prompt="", guidance_scale=1.,
+                #   width=input_img.shape[-1], height=input_img.shape[-2],
+                output_type='latent', return_dict=False,
+                num_inference_steps=self.cfg.diffusion_steps, latents=latents.to(self.weights_dtype)
+            )
 
             # add noise
             # noise = torch.randn_like(latents)
