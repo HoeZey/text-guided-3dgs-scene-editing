@@ -5,7 +5,7 @@ import cv2
 import numpy as np
 import torch
 import torch.nn.functional as F
-from controlnet_aux import CannyDetector, NormalBaeDetector
+from controlnet_aux import CannyDetector, NormalBaeDetector, MidasDetector
 from diffusers import ControlNetModel, DDIMScheduler, StableDiffusionControlNetPipeline
 from diffusers.utils.import_utils import is_xformers_available
 from tqdm import tqdm
@@ -74,6 +74,8 @@ class ControlNetGuidance(BaseObject):
             controlnet_name_or_path = "lllyasviel/control_v11e_sd15_ip2p"
         elif self.cfg.control_type == "inpaint":
             controlnet_name_or_path = "lllyasviel/control_v11p_sd15_inpaint"
+        elif self.cfg.control_type == "depth":
+            controlnet_name_or_path = "lllyasviel/control_v11f1p_sd15_depth"
 
         self.weights_dtype = (
             torch.float16 if self.cfg.half_precision_weights else torch.float32
@@ -92,6 +94,41 @@ class ControlNetGuidance(BaseObject):
             torch_dtype=self.weights_dtype,
             cache_dir=self.cfg.cache_dir,
         )
+
+        # controlnet_name_or_paths = []
+        # for c_type in self.cfg.control_type.split(','):
+
+        #     if c_type == "normal":
+        #         controlnet_name_or_paths.append("lllyasviel/control_v11p_sd15_normalbae")
+        #     elif c_type == "canny":
+        #         controlnet_name_or_paths.append("lllyasviel/control_v11p_sd15_canny")
+        #     elif c_type == "p2p":
+        #         controlnet_name_or_paths.append("lllyasviel/control_v11e_sd15_ip2p")
+        #     elif c_type == "inpaint":
+        #         controlnet_name_or_paths.append("lllyasviel/control_v11p_sd15_inpaint")
+        #     elif c_type == "depth":
+        #         controlnet_name_or_paths.append("lllyasviel/control_v11f1p_sd15_depth")
+
+        # self.weights_dtype = (
+        #     torch.float16 if self.cfg.half_precision_weights else torch.float32
+        # )
+
+        # pipe_kwargs = {
+        #     "safety_checker": None,
+        #     "feature_extractor": None,
+        #     "requires_safety_checker": False,
+        #     "torch_dtype": self.weights_dtype,
+        #     "cache_dir": self.cfg.cache_dir,
+        # }
+
+        # controlnet = []
+        # for controlnet_name_or_path in controlnet_name_or_paths:
+        #     controlnet.append(ControlNetModel.from_pretrained(
+        #         controlnet_name_or_path,
+        #         torch_dtype=self.weights_dtype,
+        #         cache_dir=self.cfg.cache_dir,
+        #     ))
+
         self.pipe = StableDiffusionControlNetPipeline.from_pretrained(
             self.cfg.pretrained_model_name_or_path, controlnet=controlnet, **pipe_kwargs
         ).to(self.device)
@@ -136,6 +173,8 @@ class ControlNetGuidance(BaseObject):
             self.preprocessor.model.to(self.device)
         elif self.cfg.control_type == "canny":
             self.preprocessor = CannyDetector()
+        elif self.cfg.control_type == "depth":
+            self.preprocessor = MidasDetector.from_pretrained("lllyasviel/Annotators")
 
         for p in self.vae.parameters():
             p.requires_grad_(False)
@@ -284,6 +323,18 @@ class ControlNetGuidance(BaseObject):
                 (cond_rgb[0].detach().cpu().numpy() * 255).astype(np.uint8).copy()
             )
             detected_map = self.preprocessor(cond_rgb)
+
+            #import ipdb
+            #ipdb.set_trace()
+            
+            threestudio.info(f'Normal maps being saved!')
+            normal_maps = os.listdir('/home/lui/cv2/GaussianEditor/normal_maps/')
+            if len(normal_maps) == 0:
+                torch.save(detected_map, '/home/lui/cv2/GaussianEditor/normal_maps/1')
+            else:
+                max_normal = int(max(normal_maps))
+                torch.save(detected_map, f'/home/lui/cv2/GaussianEditor/normal_maps/{max_normal+1}')
+
             control = (
                 torch.from_numpy(np.array(detected_map)).float().to(self.device) / 255.0
             )
@@ -301,6 +352,24 @@ class ControlNetGuidance(BaseObject):
                 torch.from_numpy(np.array(detected_map)).float().to(self.device) / 255.0
             )
             control = control.unsqueeze(-1).repeat(1, 1, 3)
+            control = control.unsqueeze(0)
+            control = control.permute(0, 3, 1, 2)
+        elif self.cfg.control_type == "depth":
+            cond_rgb = ((cond_rgb[0].detach().cpu().numpy() * 255).astype(np.uint8).copy())
+            detected_map = self.preprocessor(cond_rgb)
+
+            # TODO: REMOVE THIS PART OF THE CODE AFTER TESTING EVERYTHING
+            threestudio.info(f'Depth maps being saved!')
+            depth_maps = os.listdir('/home/lui/cv2/GaussianEditor/depth_maps/')
+            if len(depth_maps) == 0:
+                torch.save(detected_map, '/home/lui/cv2/GaussianEditor/depth_maps/1')
+            else:
+                max_depth = int(max(depth_maps))
+                torch.save(detected_map, f'/home/lui/cv2/GaussianEditor/depth_maps/{max_depth+1}')
+
+            control = (
+                torch.from_numpy(np.array(detected_map)).float().to(self.device) / 255.0
+            )
             control = control.unsqueeze(0)
             control = control.permute(0, 3, 1, 2)
         elif self.cfg.control_type == "p2p":
@@ -353,6 +422,7 @@ class ControlNetGuidance(BaseObject):
     def __call__(
         self,
         rgb: Float[Tensor, "B H W C"],
+        depth: Float[Tensor, "B H W C"],
         cond_rgb: Float[Tensor, "B H W C"],
         prompt_utils: PromptProcessorOutput,
         **kwargs,
@@ -372,7 +442,28 @@ class ControlNetGuidance(BaseObject):
         )
         latents = self.encode_images(rgb_BCHW_HW8)
 
-        image_cond = self.prepare_image_cond(cond_rgb)
+        #image_cond = self.prepare_image_cond(cond_rgb)
+        #image_cond = ((depth[0].detach().cpu().numpy() * 255).astype(np.uint8).copy())
+        image_cond = (depth[0].detach().cpu().numpy()).copy()
+        image_cond *= 255.0/image_cond.max()
+        image_cond = image_cond.astype(np.uint8)
+        image_cond = np.repeat(image_cond, 3, axis=2)
+
+        # TODO: REMOVE THIS PART OF THE CODE AFTER TESTING EVERYTHING
+        threestudio.info(f'Depth maps being saved!')
+        depth_maps = os.listdir('/home/lui/cv2/GaussianEditor/depth_maps/')
+        if len(depth_maps) == 0:
+            torch.save(image_cond, '/home/lui/cv2/GaussianEditor/depth_maps/1')
+        else:
+            max_depth = int(max(depth_maps))
+            torch.save(image_cond, f'/home/lui/cv2/GaussianEditor/depth_maps/{max_depth+1}')
+
+        image_cond = (
+            torch.from_numpy(np.array(image_cond)).float().to(self.device) / 255.0
+        )
+        image_cond = image_cond.unsqueeze(0)
+        image_cond = image_cond.permute(0, 3, 1, 2)
+        
         image_cond = F.interpolate(
             image_cond, (RH, RW), mode="bilinear", align_corners=False
         )
