@@ -21,8 +21,7 @@ class InstructPix2PixGuidance(BaseObject):
     @dataclass
     class Config(BaseObject.Config):
         cache_dir: Optional[str] = None
-        # ddim_scheduler_name_or_path: str = "CompVis/stable-diffusion-v1-4"
-        ddim_scheduler_name_or_path: str = 'stabilityai/stable-diffusion-2-1'
+        ddim_scheduler_name_or_path: str = "CompVis/stable-diffusion-v1-4"
         ip2p_name_or_path: str = "timbrooks/instruct-pix2pix"
 
         enable_memory_efficient_attention: bool = False
@@ -41,9 +40,7 @@ class InstructPix2PixGuidance(BaseObject):
         min_step_percent: float = 0.02
         max_step_percent: float = 0.98
 
-        diffusion_steps: int = 100
-        # for some reason this error does not show up when using code from https://github.com/shaibagon/diffusers_ddim_inversion
-        # ValueError: `num_inference_steps`: 150 cannot be larger than `self.config.train_timesteps`: 125 as the unet model trained with this scheduler can only handle maximal 125 timesteps.
+        diffusion_steps: int = 50  # 100
 
         use_sds: bool = False
 
@@ -67,15 +64,23 @@ class InstructPix2PixGuidance(BaseObject):
         self.pipe = StableDiffusionInstructPix2PixPipeline.from_pretrained(
             self.cfg.ip2p_name_or_path, **pipe_kwargs
         ).to(self.device)
-
-        print(f'Loading scheduler for {self.cfg.ddim_scheduler_name_or_path}')
-        self.inverse_scheduler = DDIMInverseScheduler.from_pretrained(
+        self.scheduler = DDIMScheduler.from_pretrained(
             self.cfg.ddim_scheduler_name_or_path,
-            subfolder='scheduler',
+            subfolder="scheduler",
             torch_dtype=self.weights_dtype,
             cache_dir=self.cfg.cache_dir,
         )
-        self.inverse_scheduler.set_timesteps(self.cfg.diffusion_steps)
+        self.scheduler.set_timesteps(self.cfg.diffusion_steps)
+
+        self.inverse_scheduler = DDIMInverseScheduler.from_pretrained(
+            self.cfg.ddim_scheduler_name_or_path, subfolder='scheduler')
+        self.inverse_pipe = StableDiffusionPipeline.from_pretrained(
+            self.cfg.ddim_scheduler_name_or_path,
+            scheduler=self.inverse_scheduler,
+            safety_checker=None,
+            torch_dtype=self.weights_dtype
+        ).to(self.device)
+        self.num_inverse_steps = 50
 
         if self.cfg.enable_memory_efficient_attention:
             if parse_version(torch.__version__) >= parse_version("2"):
@@ -107,10 +112,10 @@ class InstructPix2PixGuidance(BaseObject):
         for p in self.unet.parameters():
             p.requires_grad_(False)
 
-        self.num_train_timesteps = self.inverse_scheduler.config.num_train_timesteps
+        self.num_train_timesteps = self.scheduler.config.num_train_timesteps
         self.set_min_max_steps()  # set to default value
 
-        self.alphas: Float[Tensor, "..."] = self.inverse_scheduler.alphas_cumprod.to(
+        self.alphas: Float[Tensor, "..."] = self.scheduler.alphas_cumprod.to(
             self.device
         )
 
@@ -177,12 +182,25 @@ class InstructPix2PixGuidance(BaseObject):
         image_cond_latents: Float[Tensor, "B 4 DH DW"],
         t: Int[Tensor, "B"],
     ) -> Float[Tensor, "B 4 DH DW"]:
-        self.inverse_scheduler.config.num_train_timesteps = t.item()
-        self.inverse_scheduler.set_timesteps(self.cfg.diffusion_steps)
+        self.scheduler.config.num_train_timesteps = t.item()
+        self.scheduler.set_timesteps(self.cfg.diffusion_steps)
 
         with torch.no_grad():
+            INVERT = True
+            if INVERT:
+                latents, _ = self.inverse_pipe(
+                        prompt="", negative_prompt="", guidance_scale=1.,
+                        # width=input_img.shape[-1], height=input_img.shape[-2],
+                        output_type='latent', return_dict=False,
+                        num_inference_steps=self.num_inverse_steps, latents=latents.to(self.weights_dtype)
+                )
+            else:
+                noise = torch.randn_like(latents)
+                latents = self.scheduler.add_noise(latents, noise, t)
             threestudio.debug("Start editing...")
-            for i, t in enumerate(self.inverse_scheduler.timesteps):
+            # sections of code used from https://github.com/huggingface/diffusers/blob/main/src/diffusers/pipelines/stable_diffusion/pipeline_stable_diffusion_instruct_pix2pix.py
+            for i, t in enumerate(self.scheduler.timesteps):
+                # pred noise
                 latent_model_input = torch.cat([latents] * 3)
                 latent_model_input = torch.cat(
                     [latent_model_input, image_cond_latents], dim=1
@@ -197,15 +215,14 @@ class InstructPix2PixGuidance(BaseObject):
                     3
                 )
                 noise_pred = (
-                        noise_pred_uncond
-                        + self.cfg.guidance_scale * (noise_pred_text - noise_pred_image)
-                        + self.cfg.condition_scale * (noise_pred_image - noise_pred_uncond)
+                    noise_pred_uncond
+                    + self.cfg.guidance_scale * (noise_pred_text - noise_pred_image)
+                    + self.cfg.condition_scale * (noise_pred_image - noise_pred_uncond)
                 )
 
                 # get previous sample, continue loop
-                latents = self.inverse_scheduler.step(noise_pred, t, latents).prev_sample
+                latents = self.scheduler.step(noise_pred, t, latents).prev_sample
             threestudio.debug("Editing finished.")
-
         return latents
 
     def compute_grad_sds(
@@ -240,15 +257,20 @@ class InstructPix2PixGuidance(BaseObject):
         grad = w * (noise_pred - noise)
         return grad
 
-    # this seems like the entry point for editing
     def __call__(
         self,
-        rgb: Float[Tensor, "B H W C"],  # but why is there batch?
+        rgb: Float[Tensor, "B H W C"],
         cond_rgb: Float[Tensor, "B H W C"],
         prompt_utils: PromptProcessorOutput,
         **kwargs,
     ):
+        # batch size seems to always be 1
         batch_size, H, W, _ = rgb.shape
+
+        # import matplotlib.pyplot as plt
+        # plt.imshow(rgb[0].detach().cpu().numpy())
+        # import time
+        # plt.savefig(f"dbg_out/rgb{int(time.time())}.png")
 
         rgb_BCHW = rgb.permute(0, 3, 1, 2)
         latents: Float[Tensor, "B 4 DH DW"]
