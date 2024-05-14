@@ -43,7 +43,7 @@ class ControlNetGuidance(BaseObject):
         min_step_percent: float = 0.02
         max_step_percent: float = 0.98
 
-        diffusion_steps: int = 20
+        diffusion_steps: int = 100
 
         use_sds: bool = False
 
@@ -403,14 +403,16 @@ class ControlNetGuidance(BaseObject):
         temp = torch.zeros(1).to(rgb.device)
         text_embeddings = prompt_utils.get_text_embeddings(temp, temp, temp, False)
 
-        # timestep ~ U(0.02, 0.98) to avoid very high/low noise level
-        t = torch.randint(
-            self.min_step,
-            self.max_step + 1,
-            [batch_size],
-            dtype=torch.long,
-            device=self.device,
-        )
+        # # timestep ~ U(0.02, 0.98) to avoid very high/low noise level
+        # t = torch.randint(
+        #     self.min_step,
+        #     self.max_step + 1,
+        #     [batch_size],
+        #     dtype=torch.long,
+        #     device=self.device,
+        # )
+
+        t = torch.full((batch_size,), self.max_step, dtype=torch.long, device=self.device)
 
         if self.cfg.use_sds:
             grad = self.compute_grad_sds(text_embeddings, latents, image_cond, t)
