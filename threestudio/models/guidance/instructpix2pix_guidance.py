@@ -40,7 +40,7 @@ class InstructPix2PixGuidance(BaseObject):
         min_step_percent: float = 0.02
         max_step_percent: float = 0.98
 
-        diffusion_steps: int = 50  # 100
+        diffusion_steps: int = 250  # 20
 
         use_sds: bool = False
 
@@ -80,7 +80,7 @@ class InstructPix2PixGuidance(BaseObject):
             safety_checker=None,
             torch_dtype=self.weights_dtype
         ).to(self.device)
-        self.num_inverse_steps = 50
+        self.num_inverse_steps = 250
 
         if self.cfg.enable_memory_efficient_attention:
             if parse_version(torch.__version__) >= parse_version("2"):
@@ -186,7 +186,7 @@ class InstructPix2PixGuidance(BaseObject):
         self.scheduler.set_timesteps(self.cfg.diffusion_steps)
 
         with torch.no_grad():
-            INVERT = True
+            INVERT = False
             if INVERT:
                 latents, _ = self.inverse_pipe(
                         prompt="", negative_prompt="", guidance_scale=1.,
@@ -298,14 +298,20 @@ class InstructPix2PixGuidance(BaseObject):
             [text_embeddings, text_embeddings[-1:]], dim=0
         )  # [positive, negative, negative]
 
-        # timestep ~ U(0.02, 0.98) to avoid very high/low noise level
-        t = torch.randint(
-            self.min_step,
-            self.max_step + 1,
-            [batch_size],
-            dtype=torch.long,
-            device=self.device,
-        )
+        # # timestep ~ U(0.02, 0.98) to avoid very high/low noise level
+        # t = torch.randint(
+        #     self.min_step,
+        #     self.max_step + 1,
+        #     [batch_size],
+        #     dtype=torch.long,
+        #     device=self.device,
+        # )
+
+        t = torch.full((batch_size,), self.max_step, dtype=torch.long, device=self.device)
+
+        # gives cuda error?
+        # t = torch.full((batch_size,), self.num_train_timesteps, dtype=torch.long, device=self.device)
+        print(f't: {t}')
 
         if self.cfg.use_sds:
             grad = self.compute_grad_sds(text_embeddings, latents, cond_latents, t)
