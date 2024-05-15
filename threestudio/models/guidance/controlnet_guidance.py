@@ -359,6 +359,7 @@ class ControlNetGuidance(BaseObject):
             detected_map = self.preprocessor(cond_rgb)
 
             # TODO: REMOVE THIS PART OF THE CODE AFTER TESTING EVERYTHING
+            """
             threestudio.info(f'Depth maps being saved!')
             depth_maps = os.listdir('/home/lui/cv2/GaussianEditor/depth_maps/')
             if len(depth_maps) == 0:
@@ -366,7 +367,8 @@ class ControlNetGuidance(BaseObject):
             else:
                 max_depth = int(max(depth_maps))
                 torch.save(detected_map, f'/home/lui/cv2/GaussianEditor/depth_maps/{max_depth+1}')
-
+            """
+                
             control = (
                 torch.from_numpy(np.array(detected_map)).float().to(self.device) / 255.0
             )
@@ -450,6 +452,7 @@ class ControlNetGuidance(BaseObject):
         image_cond = np.repeat(image_cond, 3, axis=2)
 
         # TODO: REMOVE THIS PART OF THE CODE AFTER TESTING EVERYTHING
+        """
         threestudio.info(f'Depth maps being saved!')
         depth_maps = os.listdir('/home/lui/cv2/GaussianEditor/depth_maps/')
         if len(depth_maps) == 0:
@@ -457,6 +460,7 @@ class ControlNetGuidance(BaseObject):
         else:
             max_depth = int(max(depth_maps))
             torch.save(image_cond, f'/home/lui/cv2/GaussianEditor/depth_maps/{max_depth+1}')
+        """
 
         image_cond = (
             torch.from_numpy(np.array(image_cond)).float().to(self.device) / 255.0
@@ -497,6 +501,14 @@ class ControlNetGuidance(BaseObject):
             edit_latents = self.edit_latents(text_embeddings, latents, image_cond, t)
             edit_images = self.decode_latents(edit_latents)
             edit_images = F.interpolate(edit_images, (H, W), mode="bilinear")
+
+            threestudio.info(f'Saving edits!')
+            edits = list(map(int, os.listdir('/home/lui/cv2/GaussianEditor/edits/')))
+            if len(edits) == 0:
+                torch.save(edit_images, '/home/lui/cv2/GaussianEditor/edits/1')
+            else:
+                max_edit = max(edits)
+                torch.save(edit_images, f'/home/lui/cv2/GaussianEditor/edits/{max_edit+1}')
 
             return {"edit_images": edit_images.permute(0, 2, 3, 1)}
 
