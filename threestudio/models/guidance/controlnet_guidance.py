@@ -317,7 +317,7 @@ class ControlNetGuidance(BaseObject):
             threestudio.debug("Editing finished.")
         return latents
 
-    def prepare_image_cond(self, cond_rgb: Float[Tensor, "B H W C"]):
+    def prepare_image_cond(self, cond_rgb: Float[Tensor, "B H W C"], depth: Float[Tensor, "B H W C"]):
         if self.cfg.control_type == "normal":
             cond_rgb = (
                 (cond_rgb[0].detach().cpu().numpy() * 255).astype(np.uint8).copy()
@@ -355,8 +355,13 @@ class ControlNetGuidance(BaseObject):
             control = control.unsqueeze(0)
             control = control.permute(0, 3, 1, 2)
         elif self.cfg.control_type == "depth":
-            cond_rgb = ((cond_rgb[0].detach().cpu().numpy() * 255).astype(np.uint8).copy())
-            detected_map = self.preprocessor(cond_rgb)
+            cond_rgb = (depth[0].detach().cpu().numpy()).copy()
+            cond_rgb *= 255.0/cond_rgb.max()
+            cond_rgb = cond_rgb.astype(np.uint8)
+            detected_map = np.repeat(cond_rgb, 3, axis=2)
+
+            # cond_rgb = ((cond_rgb[0].detach().cpu().numpy() * 255).astype(np.uint8).copy())
+            # detected_map = self.preprocessor(cond_rgb)
 
             # TODO: REMOVE THIS PART OF THE CODE AFTER TESTING EVERYTHING
             """
@@ -368,7 +373,7 @@ class ControlNetGuidance(BaseObject):
                 max_depth = int(max(depth_maps))
                 torch.save(detected_map, f'/home/lui/cv2/GaussianEditor/depth_maps/{max_depth+1}')
             """
-                
+            
             control = (
                 torch.from_numpy(np.array(detected_map)).float().to(self.device) / 255.0
             )
@@ -444,29 +449,7 @@ class ControlNetGuidance(BaseObject):
         )
         latents = self.encode_images(rgb_BCHW_HW8)
 
-        #image_cond = self.prepare_image_cond(cond_rgb)
-        #image_cond = ((depth[0].detach().cpu().numpy() * 255).astype(np.uint8).copy())
-        image_cond = (depth[0].detach().cpu().numpy()).copy()
-        image_cond *= 255.0/image_cond.max()
-        image_cond = image_cond.astype(np.uint8)
-        image_cond = np.repeat(image_cond, 3, axis=2)
-
-        # TODO: REMOVE THIS PART OF THE CODE AFTER TESTING EVERYTHING
-        """
-        threestudio.info(f'Depth maps being saved!')
-        depth_maps = os.listdir('/home/lui/cv2/GaussianEditor/depth_maps/')
-        if len(depth_maps) == 0:
-            torch.save(image_cond, '/home/lui/cv2/GaussianEditor/depth_maps/1')
-        else:
-            max_depth = int(max(depth_maps))
-            torch.save(image_cond, f'/home/lui/cv2/GaussianEditor/depth_maps/{max_depth+1}')
-        """
-
-        image_cond = (
-            torch.from_numpy(np.array(image_cond)).float().to(self.device) / 255.0
-        )
-        image_cond = image_cond.unsqueeze(0)
-        image_cond = image_cond.permute(0, 3, 1, 2)
+        image_cond = self.prepare_image_cond(cond_rgb, depth)
         
         image_cond = F.interpolate(
             image_cond, (RH, RW), mode="bilinear", align_corners=False
