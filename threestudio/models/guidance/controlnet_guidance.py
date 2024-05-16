@@ -485,13 +485,13 @@ class ControlNetGuidance(BaseObject):
             edit_images = self.decode_latents(edit_latents)
             edit_images = F.interpolate(edit_images, (H, W), mode="bilinear")
 
-            threestudio.info(f'Saving edits!')
-            edits = list(map(int, os.listdir('/home/lui/cv2/GaussianEditor/edits/')))
-            if len(edits) == 0:
-                torch.save(edit_images, '/home/lui/cv2/GaussianEditor/edits/1')
-            else:
-                max_edit = max(edits)
-                torch.save(edit_images, f'/home/lui/cv2/GaussianEditor/edits/{max_edit+1}')
+            # threestudio.info(f'Saving edits!')
+            # edits = list(map(int, os.listdir('/home/lui/cv2/GaussianEditor/edits/')))
+            # if len(edits) == 0:
+            #     torch.save(edit_images, '/home/lui/cv2/GaussianEditor/edits/1')
+            # else:
+            #     max_edit = max(edits)
+            #     torch.save(edit_images, f'/home/lui/cv2/GaussianEditor/edits/{max_edit+1}')
 
             return {"edit_images": edit_images.permute(0, 2, 3, 1)}
 
