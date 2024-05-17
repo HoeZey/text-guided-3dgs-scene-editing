@@ -43,7 +43,9 @@ class ControlNetGuidance(BaseObject):
         min_step_percent: float = 0.02
         max_step_percent: float = 0.98
 
-        diffusion_steps: int = 100
+        diffusion_steps: int = 30
+        inv_steps: int = 2
+        train_steps: int = 980
 
         use_sds: bool = False
 
@@ -258,10 +260,10 @@ class ControlNetGuidance(BaseObject):
                 prompt="", negative_prompt="", guidance_scale=1.,
                 #   width=input_img.shape[-1], height=input_img.shape[-2],
                 output_type='latent', return_dict=False,
-                num_inference_steps=self.cfg.diffusion_steps, latents=latents.to(self.weights_dtype)
+                num_inference_steps=self.cfg.inv_steps, latents=latents.to(self.weights_dtype)
             )
 
-            # add noise
+            # # add noise
             # noise = torch.randn_like(latents)
             # latents = self.scheduler.add_noise(latents, noise, t)  # type: ignore
 
@@ -412,7 +414,7 @@ class ControlNetGuidance(BaseObject):
         #     device=self.device,
         # )
 
-        t = torch.full((batch_size,), self.max_step, dtype=torch.long, device=self.device)
+        t = torch.full((batch_size,), self.cfg.train_steps, dtype=torch.long, device=self.device)
 
         if self.cfg.use_sds:
             grad = self.compute_grad_sds(text_embeddings, latents, image_cond, t)

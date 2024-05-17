@@ -9,6 +9,7 @@ from torchvision import transforms as tvt
 
 def load_image(imgname: str, target_size: Optional[Union[int, Tuple[int, int]]] = None) -> torch.Tensor:
     pil_img = Image.open(imgname).convert('RGB')
+    print(pil_img.size)
     if target_size is not None:
         if isinstance(target_size, int):
             target_size = (target_size, target_size)
@@ -54,11 +55,13 @@ def encode_cond_images(
 
 @torch.no_grad()
 def ddim_inversion(imgname: str, num_steps: int = 50, verify: Optional[bool] = False) -> torch.Tensor:
+    # model_id = 'stabilityai/stable-diffusion-2-1'
+    model_id = "runwayml/stable-diffusion-v1-5"
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     dtype = torch.float16
 
-    inverse_scheduler = DDIMInverseScheduler.from_pretrained('stabilityai/stable-diffusion-2-1', subfolder='scheduler')
-    pipe = StableDiffusionPipeline.from_pretrained('stabilityai/stable-diffusion-2-1',
+    inverse_scheduler = DDIMInverseScheduler.from_pretrained(model_id, subfolder='scheduler')
+    pipe = StableDiffusionPipeline.from_pretrained(model_id,
                                                    scheduler=inverse_scheduler,
                                                    safety_checker=None,
                                                    torch_dtype=dtype)
@@ -66,61 +69,30 @@ def ddim_inversion(imgname: str, num_steps: int = 50, verify: Optional[bool] = F
     vae = pipe.vae.eval()
     unet = pipe.unet.eval()
 
-    input_img = load_image(imgname).to(device=device, dtype=dtype)
+    input_img = load_image(imgname, target_size=(1024, 768)).to(device=device, dtype=dtype)
     latents = img_to_latents(input_img, vae)
 
-    weights_dtype = torch.float16
-    guidance_scale = 7.5
-    condition_scale = 1.5
-
-    image_cond_latents = encode_cond_images(input_img, vae, weights_dtype)
-
+    inv_steps = 50
     # inv_latents, _ = pipe(prompt="", negative_prompt="", guidance_scale=1.,
     #                       # width=input_img.shape[-1], height=input_img.shape[-2],
     #                       output_type='latent', return_dict=False,
-    #                       num_inference_steps=num_steps, latents=latents)
+    #                       num_inference_steps=inv_steps, latents=latents)
 
-    with torch.no_grad():
-        for i, t in enumerate(inverse_scheduler.timesteps):
-            # pred noise
-            latent_model_input = torch.cat([latents] * 3)
-            latent_model_input = torch.cat(
-                [latent_model_input, image_cond_latents], dim=1
-            )
-
-            print(latent_model_input.shape)
-
-            noise_pred = unet(
-                latent_model_input.to(weights_dtype),
-                t.to(weights_dtype),
-                encoder_hidden_states=None,
-            ).sample.to(dtype)
-
-            # perform classifier-free guidance
-            noise_pred_text, noise_pred_image, noise_pred_uncond = noise_pred.chunk(
-                3
-            )
-            noise_pred = (
-                    noise_pred_uncond
-                    + guidance_scale * (noise_pred_text - noise_pred_image)
-                    + condition_scale * (noise_pred_image - noise_pred_uncond)
-            )
-
-            # get previous sample, continue loop
-            latents = inverse_scheduler.step(noise_pred, t, latents).prev_sample
-
-    # verify
     if verify:
-        pipe.scheduler = DDIMScheduler.from_pretrained('stabilityai/stable-diffusion-2-1', subfolder='scheduler')
-        image = pipe(prompt="", negative_prompt="", guidance_scale=1.,
-                     num_inference_steps=num_steps, latents=latents)
+        pipe.scheduler = DDIMScheduler.from_pretrained(model_id, subfolder='scheduler')
+        noise = torch.randn_like(latents)
+        inv_latents = latents + noise
+
+        prompt = "all green"
+        image = pipe(prompt=prompt, negative_prompt="", guidance_scale=1.,
+                     num_inference_steps=num_steps, latents=inv_latents)
         fig, ax = plt.subplots(1, 2)
         ax[0].imshow(tvt.ToPILImage()(input_img[0]))
         ax[1].imshow(image.images[0])
-        # ax[2].imshow(latents[0][0].cpu().numpy())
+        plt.title(f'with random noise, prompt={prompt}')
         plt.show()
-    return latents
+    return inv_latents
 
 
 if __name__ == '__main__':
-    ddim_inversion('./poike.png', num_steps=250, verify=True)
+    ddim_inversion('./ddim_test.png', num_steps=50, verify=True)
