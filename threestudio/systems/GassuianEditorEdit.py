@@ -86,6 +86,7 @@ class GaussianEditor_Edit(GaussianEditor):
                 ):
                     result = self.guidance(
                         images[img_index][None],
+                        out['depth'],
                         self.origin_frames[cur_index],
                         prompt_utils,
                     )
