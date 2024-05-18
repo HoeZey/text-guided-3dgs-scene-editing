@@ -62,6 +62,7 @@ class GaussianEditor_Edit(GaussianEditor):
             )
 
     def training_step(self, batch, batch_idx):
+        # but why is this a training step?
         self.gaussian.update_learning_rate(self.true_global_step)
 
         batch_index = batch["index"]
@@ -71,6 +72,7 @@ class GaussianEditor_Edit(GaussianEditor):
 
         images = out["comp_rgb"]
 
+        # no need to call backward, as PL takes care of it
         loss = 0.0
         # nerf2nerf loss
         if self.cfg.loss.lambda_l1 > 0 or self.cfg.loss.lambda_p > 0:
@@ -84,6 +86,8 @@ class GaussianEditor_Edit(GaussianEditor):
                         < self.cfg.edit_until_step
                         and self.global_step % self.cfg.per_editing_step == 0
                 ):
+                    # uses stable-diffusion-instructpix2pix-guidance
+                    # i guess this is the part for us to augment, as this returns edited images
                     result = self.guidance(
                         images[img_index][None],
                         self.origin_frames[cur_index],

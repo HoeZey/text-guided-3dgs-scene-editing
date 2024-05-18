@@ -4,7 +4,8 @@ import cv2
 import numpy as np
 import torch
 import torch.nn.functional as F
-from diffusers import DDIMScheduler, StableDiffusionInstructPix2PixPipeline
+from diffusers import DDIMScheduler, StableDiffusionInstructPix2PixPipeline, DDIMInverseScheduler, \
+    StableDiffusionPipeline
 from diffusers.utils.import_utils import is_xformers_available
 from tqdm import tqdm
 
@@ -39,7 +40,7 @@ class InstructPix2PixGuidance(BaseObject):
         min_step_percent: float = 0.02
         max_step_percent: float = 0.98
 
-        diffusion_steps: int = 20
+        diffusion_steps: int = 250  # 20
 
         use_sds: bool = False
 
@@ -70,6 +71,16 @@ class InstructPix2PixGuidance(BaseObject):
             cache_dir=self.cfg.cache_dir,
         )
         self.scheduler.set_timesteps(self.cfg.diffusion_steps)
+
+        self.inverse_scheduler = DDIMInverseScheduler.from_pretrained(
+            self.cfg.ddim_scheduler_name_or_path, subfolder='scheduler')
+        self.inverse_pipe = StableDiffusionPipeline.from_pretrained(
+            self.cfg.ddim_scheduler_name_or_path,
+            scheduler=self.inverse_scheduler,
+            safety_checker=None,
+            torch_dtype=self.weights_dtype
+        ).to(self.device)
+        self.num_inverse_steps = 250
 
         if self.cfg.enable_memory_efficient_attention:
             if parse_version(torch.__version__) >= parse_version("2"):
@@ -131,6 +142,7 @@ class InstructPix2PixGuidance(BaseObject):
             encoder_hidden_states=encoder_hidden_states.to(self.weights_dtype),
         ).sample.to(input_dtype)
 
+    # this one looks the same as the ddim inversion github code's part
     @torch.cuda.amp.autocast(enabled=False)
     def encode_images(
         self, imgs: Float[Tensor, "B 3 H W"]
@@ -172,24 +184,31 @@ class InstructPix2PixGuidance(BaseObject):
     ) -> Float[Tensor, "B 4 DH DW"]:
         self.scheduler.config.num_train_timesteps = t.item()
         self.scheduler.set_timesteps(self.cfg.diffusion_steps)
+
         with torch.no_grad():
-            # add noise
-            noise = torch.randn_like(latents)
-            latents = self.scheduler.add_noise(latents, noise, t)  # type: ignore
+            INVERT = False
+            if INVERT:
+                latents, _ = self.inverse_pipe(
+                        prompt="", negative_prompt="", guidance_scale=1.,
+                        # width=input_img.shape[-1], height=input_img.shape[-2],
+                        output_type='latent', return_dict=False,
+                        num_inference_steps=self.num_inverse_steps, latents=latents.to(self.weights_dtype)
+                )
+            else:
+                noise = torch.randn_like(latents)
+                latents = self.scheduler.add_noise(latents, noise, t)
             threestudio.debug("Start editing...")
             # sections of code used from https://github.com/huggingface/diffusers/blob/main/src/diffusers/pipelines/stable_diffusion/pipeline_stable_diffusion_instruct_pix2pix.py
             for i, t in enumerate(self.scheduler.timesteps):
-                # predict the noise residual with unet, NO grad!
-                with torch.no_grad():
-                    # pred noise
-                    latent_model_input = torch.cat([latents] * 3)
-                    latent_model_input = torch.cat(
-                        [latent_model_input, image_cond_latents], dim=1
-                    )
+                # pred noise
+                latent_model_input = torch.cat([latents] * 3)
+                latent_model_input = torch.cat(
+                    [latent_model_input, image_cond_latents], dim=1
+                )
 
-                    noise_pred = self.forward_unet(
-                        latent_model_input, t, encoder_hidden_states=text_embeddings
-                    )
+                noise_pred = self.forward_unet(
+                    latent_model_input, t, encoder_hidden_states=text_embeddings
+                )
 
                 # perform classifier-free guidance
                 noise_pred_text, noise_pred_image, noise_pred_uncond = noise_pred.chunk(
@@ -245,7 +264,13 @@ class InstructPix2PixGuidance(BaseObject):
         prompt_utils: PromptProcessorOutput,
         **kwargs,
     ):
+        # batch size seems to always be 1
         batch_size, H, W, _ = rgb.shape
+
+        # import matplotlib.pyplot as plt
+        # plt.imshow(rgb[0].detach().cpu().numpy())
+        # import time
+        # plt.savefig(f"dbg_out/rgb{int(time.time())}.png")
 
         rgb_BCHW = rgb.permute(0, 3, 1, 2)
         latents: Float[Tensor, "B 4 DH DW"]
@@ -273,14 +298,20 @@ class InstructPix2PixGuidance(BaseObject):
             [text_embeddings, text_embeddings[-1:]], dim=0
         )  # [positive, negative, negative]
 
-        # timestep ~ U(0.02, 0.98) to avoid very high/low noise level
-        t = torch.randint(
-            self.min_step,
-            self.max_step + 1,
-            [batch_size],
-            dtype=torch.long,
-            device=self.device,
-        )
+        # # timestep ~ U(0.02, 0.98) to avoid very high/low noise level
+        # t = torch.randint(
+        #     self.min_step,
+        #     self.max_step + 1,
+        #     [batch_size],
+        #     dtype=torch.long,
+        #     device=self.device,
+        # )
+
+        t = torch.full((batch_size,), self.max_step, dtype=torch.long, device=self.device)
+
+        # gives cuda error?
+        # t = torch.full((batch_size,), self.num_train_timesteps, dtype=torch.long, device=self.device)
+        print(f't: {t}')
 
         if self.cfg.use_sds:
             grad = self.compute_grad_sds(text_embeddings, latents, cond_latents, t)
