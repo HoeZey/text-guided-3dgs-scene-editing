@@ -31,7 +31,7 @@ class ControlNetGuidance(BaseObject):
         enable_sequential_cpu_offload: bool = False
         enable_attention_slicing: bool = False
         enable_channels_last_format: bool = False
-        guidance_scale: float = 7.5
+        guidance_scale: float = 20.0
         condition_scale: float = 1.5
         grad_clip: Optional[
             Any
@@ -44,7 +44,7 @@ class ControlNetGuidance(BaseObject):
         max_step_percent: float = 0.98
 
         diffusion_steps: int = 30
-        inv_steps: int = 2
+        inv_steps: int = 30
         train_steps: int = 980
 
         use_sds: bool = False
