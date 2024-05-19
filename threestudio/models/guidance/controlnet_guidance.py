@@ -327,13 +327,14 @@ class ControlNetGuidance(BaseObject):
             #import ipdb
             #ipdb.set_trace()
             
-            threestudio.info(f'Normal maps being saved!')
-            normal_maps = os.listdir('/home/lui/cv2/GaussianEditor/normal_maps/')
-            if len(normal_maps) == 0:
-                torch.save(detected_map, '/home/lui/cv2/GaussianEditor/normal_maps/1')
-            else:
-                max_normal = int(max(normal_maps))
-                torch.save(detected_map, f'/home/lui/cv2/GaussianEditor/normal_maps/{max_normal+1}')
+            # TODO: REMOVE THIS PART OF THE CODE AFTER TESTING EVERYTHING
+            # threestudio.info(f'Normal maps being saved!')
+            # normal_maps = os.listdir('/home/lui/cv2/GaussianEditor/normal_maps/')
+            # if len(normal_maps) == 0:
+            #     torch.save(detected_map, '/home/lui/cv2/GaussianEditor/normal_maps/1')
+            # else:
+            #     max_normal = int(max(normal_maps))
+            #     torch.save(detected_map, f'/home/lui/cv2/GaussianEditor/normal_maps/{max_normal+1}')
 
             control = (
                 torch.from_numpy(np.array(detected_map)).float().to(self.device) / 255.0
