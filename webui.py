@@ -1182,7 +1182,7 @@ class WebUI:
             rendering = self.render(edit_cameras[view_index], train=True)
             rendering, depth = rendering["comp_rgb"], rendering["depth"]
 
-            loss = self.guidance(rendering, depth, self.guidance_type.value, view_index, step)
+            loss = self.guidance(rendering, depth, view_index, step)
             loss.backward()
 
             self.densify_and_prune(step)

@@ -40,7 +40,7 @@ class EditGuidance:
         self.perceptual_loss = PerceptualLoss().eval().to(get_device())
 
 
-    def __call__(self, rendering, depth, guidance_type, view_index, step):
+    def __call__(self, rendering, depth, view_index, step):
         self.gaussian.update_learning_rate(step)
 
         # nerf2nerf loss
@@ -51,19 +51,12 @@ class EditGuidance:
                 < self.edit_until_step
                 and step % self.per_editing_step == 0
         ):
-            if guidance_type == "InstructPix2Pix":
-                result = self.guidance(
-                    rendering,
-                    self.origin_frames[view_index],
-                    self.prompt_utils,
-                )
-            else:
-                result = self.guidance(
-                    rendering,
-                    depth,
-                    self.origin_frames[view_index],
-                    self.prompt_utils,
-                )
+            result = self.guidance(
+                rendering,
+                depth,
+                self.origin_frames[view_index],
+                self.prompt_utils,
+            )
             self.edit_frames[view_index] = result["edit_images"].detach().clone() # 1 H W C
             self.train_frustums[view_index].remove()
             self.train_frustums[view_index] = ui_utils.new_frustums(view_index, self.train_frames[view_index],
