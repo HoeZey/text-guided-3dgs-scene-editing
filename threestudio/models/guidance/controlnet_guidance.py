@@ -31,8 +31,8 @@ class ControlNetGuidance(BaseObject):
         enable_sequential_cpu_offload: bool = False
         enable_attention_slicing: bool = False
         enable_channels_last_format: bool = False
-        guidance_scale: float = 20.0
-        condition_scale: float = 1.5
+        guidance_scale: float = 30.0
+        condition_scale: float = 2.5
         grad_clip: Optional[
             Any
         ] = None  # field(default_factory=lambda: [0, 2.0, 8.0, 1000])
@@ -150,7 +150,7 @@ class ControlNetGuidance(BaseObject):
             torch_dtype=self.weights_dtype,
             cache_dir=self.cfg.cache_dir
             )
-        self.inv_scheduler.config.num_train_timesteps = self.cfg.train_steps // 2
+        self.inv_scheduler.config.num_train_timesteps = self.cfg.train_steps
         
         self.inv_pipe = StableDiffusionPipeline.from_pretrained(
             self.cfg.ddim_inv_scheduler_name_or_path,
