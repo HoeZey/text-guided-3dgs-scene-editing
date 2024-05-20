@@ -25,7 +25,7 @@ class ControlNetGuidance(BaseObject):
         pretrained_model_name_or_path: str = "SG161222/Realistic_Vision_V2.0"
         ddim_scheduler_name_or_path: str = "runwayml/stable-diffusion-v1-5"
         ddim_inv_scheduler_name_or_path: str = "runwayml/stable-diffusion-v1-5" # "stabilityai/stable-diffusion-2-1"
-        control_type: str = "normal"  # normal/canny
+        control_type: str = "depth"  # normal/canny
 
         enable_memory_efficient_attention: bool = False
         enable_sequential_cpu_offload: bool = False
@@ -45,7 +45,7 @@ class ControlNetGuidance(BaseObject):
 
         diffusion_steps: int = 30
         inv_steps: int = 30
-        train_steps: int = 980
+        train_steps: int = 500  # reducing this makes less edits
 
         use_sds: bool = False
 
@@ -150,9 +150,10 @@ class ControlNetGuidance(BaseObject):
             torch_dtype=self.weights_dtype,
             cache_dir=self.cfg.cache_dir
             )
+        self.inv_scheduler.config.num_train_timesteps = self.cfg.train_steps // 2
         
         self.inv_pipe = StableDiffusionPipeline.from_pretrained(
-            'stabilityai/stable-diffusion-2-1',
+            self.cfg.ddim_inv_scheduler_name_or_path,
             scheduler=self.inv_scheduler,
             **pipe_kwargs
         ).to(self.device)
@@ -302,7 +303,7 @@ class ControlNetGuidance(BaseObject):
                 num_inference_steps=self.cfg.inv_steps, latents=latents.to(self.weights_dtype)
             )
 
-            # # add noise
+            # add noise
             # noise = torch.randn_like(latents)
             # latents = self.scheduler.add_noise(latents, noise, t)  # type: ignore
 
