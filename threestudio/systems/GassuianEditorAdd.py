@@ -96,6 +96,7 @@ class GaussianEditor_Add(GaussianEditor):
             height, width = 1024, 1024
 
             image_in.save(render_path)
+            # so it seems thats where the anchor image gets produced
             out = inpaint_model(
                 prompt=self.cfg.inpaint_prompt,
                 image=image_in,
@@ -118,6 +119,7 @@ class GaussianEditor_Add(GaussianEditor):
         inpainted_image = to_tensor(out).to("cuda")
 
         if self.cfg.cache_overwrite or len(os.listdir(mv_image_dir)) != 14:
+            # and here it makes a multiview prediction?
             p1 = subprocess.Popen(
                 f"{sys.prefix}/bin/accelerate launch --config_file 1gpu.yaml test_mvdiffusion_seq.py "
                 f"--save_dir {mv_image_dir} --config configs/mvdiffusion-joint-ortho-6views.yaml"
@@ -129,6 +131,7 @@ class GaussianEditor_Add(GaussianEditor):
             p1.wait()
 
         if self.cfg.cache_overwrite or not os.path.exists(mesh_path):
+            # then here it makes the mesh from images
             print(
                 f"{sys.prefix}/bin/python launch.py --config configs/neuralangelo-ortho-wmask.yaml --save_dir {align_cache_dir} --gpu 0 --train dataset.root_dir={os.path.dirname(mv_image_dir)} dataset.scene={os.path.basename(mv_image_dir)}"
             )
@@ -142,6 +145,7 @@ class GaussianEditor_Add(GaussianEditor):
             p2.wait()
 
         if self.cfg.cache_overwrite or not os.path.exists(gs_path):
+            # and now converts the mesh to gs
             p3 = subprocess.Popen(
                 [
                     f"{sys.prefix}/bin/python",
@@ -159,6 +163,7 @@ class GaussianEditor_Add(GaussianEditor):
         object_mask = np.array(removed_bg)
         object_mask = object_mask[:, :, 3] > 0
         object_mask = torch.from_numpy(object_mask)
+        # wtf is this [None] though?
         bbox = masks_to_boxes(object_mask[None])[0].to("cuda")
         # repo = "isl-org/ZoeDepth"
         # depth_estimator = torch.hub.load(repo, "ZoeD_N", pretrained=True).to("cuda")
