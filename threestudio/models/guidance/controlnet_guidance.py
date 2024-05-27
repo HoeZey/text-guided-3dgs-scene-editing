@@ -292,16 +292,21 @@ class ControlNetGuidance(BaseObject):
         image_cond: Float[Tensor, "B 3 H W"],
         t: Int[Tensor, "B"],
     ) -> Float[Tensor, "B 4 DH DW"]:
-        self.scheduler.config.num_train_timesteps = t.item()
+        self.scheduler.config.num_train_timesteps = t[0].item()
         self.scheduler.set_timesteps(self.cfg.diffusion_steps)        
         with torch.no_grad():
 
-            latents, _ = self.inv_pipe(
-                prompt="", negative_prompt="", guidance_scale=1.,
-                #   width=input_img.shape[-1], height=input_img.shape[-2],
-                output_type='latent', return_dict=False,
-                num_inference_steps=self.cfg.inv_steps, latents=latents.to(self.weights_dtype)
-            )
+            inv_latents = []
+            for l in range(latents.shape[0]):
+                # pipe brakes with batch size > 1
+                inv_latent, _ = self.inv_pipe(
+                    prompt="", negative_prompt="", guidance_scale=1.,
+                    #   width=input_img.shape[-1], height=input_img.shape[-2],
+                    output_type='latent', return_dict=False,
+                    num_inference_steps=self.cfg.inv_steps, latents=latents[l].unsqueeze(0).to(self.weights_dtype)
+                )
+                inv_latents.append(inv_latent)
+            latents = torch.cat(inv_latents, dim=0)
 
             # add noise
             # noise = torch.randn_like(latents)
@@ -310,10 +315,11 @@ class ControlNetGuidance(BaseObject):
             # sections of code used from https://github.com/huggingface/diffusers/blob/main/src/diffusers/pipelines/stable_diffusion/pipeline_stable_diffusion_instruct_pix2pix.py
             threestudio.debug("Start editing...")
             for i, t in enumerate(self.scheduler.timesteps):
-                # predict the noise residual with unet, NO grad!
-                with torch.no_grad():
+                # unroll the batch
+                for l in range(latents.shape[0]):
                     # pred noise
-                    latent_model_input = torch.cat([latents] * 2)
+                    latent_model_input = torch.cat([latents[l].unsqueeze(0)] * 2)
+                    # this forward_controlnet also brakes with batch size > 1
                     (
                         down_block_res_samples,
                         mid_block_res_sample,
@@ -333,13 +339,13 @@ class ControlNetGuidance(BaseObject):
                         down_block_additional_residuals=down_block_res_samples,
                         mid_block_additional_residual=mid_block_res_sample,
                     )
-                # perform classifier-free guidance
-                noise_pred_text, noise_pred_uncond = noise_pred.chunk(2)
-                noise_pred = noise_pred_uncond + self.cfg.guidance_scale * (
-                    noise_pred_text - noise_pred_uncond
-                )
-                # get previous sample, continue loop
-                latents = self.scheduler.step(noise_pred, t, latents).prev_sample
+                    # perform classifier-free guidance
+                    noise_pred_text, noise_pred_uncond = noise_pred.chunk(2)
+                    noise_pred = noise_pred_uncond + self.cfg.guidance_scale * (
+                        noise_pred_text - noise_pred_uncond
+                    )
+                    # get previous sample, continue loop
+                    latents[l] = self.scheduler.step(noise_pred, t, latents[l].unsqueeze(0)).prev_sample.squeeze(0)
             threestudio.debug("Editing finished.")
         return latents
 
@@ -462,7 +468,8 @@ class ControlNetGuidance(BaseObject):
         **kwargs,
     ):
         batch_size, H, W, _ = rgb.shape
-        assert batch_size == 1
+        if batch_size != 1:
+            print(f'Batch size for edit is {batch_size}!')
         assert rgb.shape[:-1] == cond_rgb.shape[:-1]
 
         rgb_BCHW = rgb.permute(0, 3, 1, 2)
