@@ -202,3 +202,8 @@ exp/
 !threestudio/data
 !threestudio/utils/wonder3D/mvdiffusion/data
 tmp_add/
+
+dataset/
+depth_maps/
+normal_maps/
+edits/

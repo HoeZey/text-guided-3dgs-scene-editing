@@ -90,6 +90,7 @@ class GaussianEditor_Edit(GaussianEditor):
                     # i guess this is the part for us to augment, as this returns edited images
                     result = self.guidance(
                         images[img_index][None],
+                        out['depth'],
                         self.origin_frames[cur_index],
                         prompt_utils,
                     )

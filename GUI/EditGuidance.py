@@ -40,7 +40,7 @@ class EditGuidance:
         self.perceptual_loss = PerceptualLoss().eval().to(get_device())
 
 
-    def __call__(self, rendering, view_index, step):
+    def __call__(self, rendering, depth, view_index, step):
         self.gaussian.update_learning_rate(step)
 
         # nerf2nerf loss
@@ -53,6 +53,7 @@ class EditGuidance:
         ):
             result = self.guidance(
                 rendering,
+                depth,
                 self.origin_frames[view_index],
                 self.prompt_utils,
             )

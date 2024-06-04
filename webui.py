@@ -1147,7 +1147,7 @@ class WebUI:
                 self.ctn_ip2p = ControlNetGuidance(
                     OmegaConf.create({"min_step_percent": 0.05,
                                       "max_step_percent": 0.8,
-                                        "control_type": "p2p"})
+                                        "control_type": "depth"})
                 )
             cur_2D_guidance = self.ctn_ip2p
             print("using ControlNet-InstructPix2Pix!")
@@ -1179,9 +1179,10 @@ class WebUI:
             view_index = random.choice(view_index_stack)
             view_index_stack.remove(view_index)
 
-            rendering = self.render(edit_cameras[view_index], train=True)["comp_rgb"]
+            rendering = self.render(edit_cameras[view_index], train=True)
+            rendering, depth = rendering["comp_rgb"], rendering["depth"]
 
-            loss = self.guidance(rendering, view_index, step)
+            loss = self.guidance(rendering, depth, view_index, step)
             loss.backward()
 
             self.densify_and_prune(step)
