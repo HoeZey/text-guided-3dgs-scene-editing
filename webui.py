@@ -1172,24 +1172,17 @@ class WebUI:
             cams=edit_cameras,
             server=self.server,
         )
-        # this stack has a bunch of frame indexes
         view_index_stack = list(range(len(edit_cameras)))
-        view_index_stack = view_index_stack[:4]  # dont want OOM
-        print("view_index_stack was cut to 4, do not use this run for results!!!")
-        # self.edit_train_steps.value is usually 1500
         for step in tqdm(range(self.edit_train_steps.value)):
-            renderings = []
-            depths = []
-            for view_index in view_index_stack:
-                temp = self.render(edit_cameras[view_index], train=True)
-                renderings.append(temp["comp_rgb"])
-                depths.append(temp["depth"])
+            if not view_index_stack:
+                view_index_stack = list(range(len(edit_cameras)))
+            view_index = random.choice(view_index_stack)
+            view_index_stack.remove(view_index)
 
-            renderings = torch.cat(renderings, dim=0)
-            depths = torch.cat(depths, dim=0)
+            rendering = self.render(edit_cameras[view_index], train=True)
+            rendering, depth = rendering["comp_rgb"], rendering["depth"]
 
-            # calls EditGuidance.__call__
-            loss = self.guidance(renderings, depths, view_index_stack, step)
+            loss = self.guidance(rendering, depth, view_index, step)
             loss.backward()
 
             self.densify_and_prune(step)
