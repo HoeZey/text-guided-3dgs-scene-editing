@@ -1,3 +1,5 @@
+from typing import List
+
 import torch
 
 from threestudio.utils.misc import get_device, step_check, dilate_mask, erode_mask, fill_closed_areas
@@ -40,34 +42,42 @@ class EditGuidance:
         self.perceptual_loss = PerceptualLoss().eval().to(get_device())
 
 
-    def __call__(self, rendering, depth, view_index, step):
+    def __call__(self, rendering, depth, view_index: List[int], step):
         self.gaussian.update_learning_rate(step)
+        if not isinstance(self.origin_frames, torch.Tensor):
+            self.origin_frames = torch.stack(self.origin_frames).to(get_device())
 
+        filtered_view_index = []
         # nerf2nerf loss
-        if view_index not in self.edit_frames or (
-                self.per_editing_step > 0
-                and self.edit_begin_step
-                < step
-                < self.edit_until_step
-                and step % self.per_editing_step == 0
-        ):
-            result = self.guidance(
-                rendering,
-                depth,
-                self.origin_frames[view_index],
-                self.prompt_utils,
-            )
-            self.edit_frames[view_index] = result["edit_images"].detach().clone() # 1 H W C
-            self.train_frustums[view_index].remove()
-            self.train_frustums[view_index] = ui_utils.new_frustums(view_index, self.train_frames[view_index],
-                                                                    self.cams[view_index], self.edit_frames[view_index], self.visible, self.server)
-            # print("edited image index", cur_index)
+        for index in view_index:
+            if index not in self.edit_frames or (
+                    self.per_editing_step > 0
+                    and self.edit_begin_step
+                    < step
+                    < self.edit_until_step
+                    and step % self.per_editing_step == 0
+            ):
+                filtered_view_index.append(index)
 
-        gt_image = self.edit_frames[view_index]
+        view_index = torch.tensor(filtered_view_index).to(get_device())
+        result = self.guidance(
+            rendering[view_index],
+            depth[view_index],
+            self.origin_frames[view_index].squeeze(1),
+            self.prompt_utils,
+        )
+        loss = torch.tensor(0.0).to(get_device())
+        for index in view_index:
+            self.edit_frames[index] = result["edit_images"].detach().clone() # 1 H W C
+            self.train_frustums[index].remove()
+            self.train_frustums[index] = ui_utils.new_frustums(index, self.train_frames[index],
+                                                                    self.cams[index], self.edit_frames[index], self.visible, self.server)
 
-        loss = self.lambda_l1 * torch.nn.functional.l1_loss(rendering, gt_image) + \
-               self.lambda_p * self.perceptual_loss(rendering.permute(0, 3, 1, 2).contiguous(),
-                                                    gt_image.permute(0, 3, 1, 2).contiguous(), ).sum()
+            gt_image = self.edit_frames[index]
+
+            loss += self.lambda_l1 * torch.nn.functional.l1_loss(rendering, gt_image) + \
+                   self.lambda_p * self.perceptual_loss(rendering.permute(0, 3, 1, 2).contiguous(),
+                                                        gt_image.permute(0, 3, 1, 2).contiguous(), ).sum()
 
         # anchor loss
         if (

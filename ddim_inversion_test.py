@@ -72,19 +72,26 @@ def ddim_inversion(imgname: str, num_steps: int = 50, verify: Optional[bool] = F
     input_img = load_image(imgname, target_size=(1024, 768)).to(device=device, dtype=dtype)
     latents = img_to_latents(input_img, vae)
 
+    latents = torch.cat([latents, latents], dim=0)
+
     inv_steps = 50
-    # inv_latents, _ = pipe(prompt="", negative_prompt="", guidance_scale=1.,
-    #                       # width=input_img.shape[-1], height=input_img.shape[-2],
-    #                       output_type='latent', return_dict=False,
-    #                       num_inference_steps=inv_steps, latents=latents)
+    inv_latents = []
+    for l in range(latents.shape[0]):
+        inv_latent, _ = pipe(prompt="", negative_prompt="", guidance_scale=1.,
+                              # width=input_img.shape[-1], height=input_img.shape[-2],
+                              output_type='latent', return_dict=False,
+                              num_inference_steps=inv_steps, latents=latents[l].unsqueeze(0))
+        inv_latents.append(inv_latent)
+    inv_latents = torch.cat(inv_latents, dim=0)
+    inv_latents = inv_latents[0].unsqueeze(0)
 
     if verify:
         pipe.scheduler = DDIMScheduler.from_pretrained(model_id, subfolder='scheduler')
-        noise = torch.randn_like(latents)
-        inv_latents = latents + noise
+        # noise = torch.randn_like(latents)
+        # inv_latents = latents + noise
 
         prompt = "all green"
-        image = pipe(prompt=prompt, negative_prompt="", guidance_scale=1.,
+        image = pipe(prompt=prompt, negative_prompt="", guidance_scale=5.,
                      num_inference_steps=num_steps, latents=inv_latents)
         fig, ax = plt.subplots(1, 2)
         ax[0].imshow(tvt.ToPILImage()(input_img[0]))

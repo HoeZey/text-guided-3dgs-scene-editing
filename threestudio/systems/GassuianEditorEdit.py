@@ -63,6 +63,10 @@ class GaussianEditor_Edit(GaussianEditor):
 
     def training_step(self, batch, batch_idx):
         # but why is this a training step?
+
+        # i dont think it gets called
+        print("training step")
+        print(batch['index'])
         self.gaussian.update_learning_rate(self.true_global_step)
 
         batch_index = batch["index"]
